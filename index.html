@@ -186,7 +186,7 @@
               loadedSignals.sort((a, b) => b.timestamp - a.timestamp);
               
               setSignals(loadedSignals);
-              signalsRef.current = loadedSignals; 
+              signalsRef.current = loadedSignals; // IMPORTANT: Keep Ref updated
               
               const wins = loadedSignals.filter(s => s.status === 'WON').length;
               const losses = loadedSignals.filter(s => s.status === 'LOST').length;
@@ -272,7 +272,11 @@
 
           const updateSignalStatus = async (currentPrices) => {
             if (!user) return;
-            signals.forEach(async (signal) => {
+            
+            // FIX: Use signalsRef.current to get the latest list inside interval
+            const currentSignals = signalsRef.current;
+            
+            currentSignals.forEach(async (signal) => {
               const currentPrice = currentPrices[signal.symbol];
               if (!currentPrice || signal.status === 'WON' || signal.status === 'LOST' || signal.status === 'SKIPPED') return;
 
@@ -407,7 +411,7 @@
           const startScanner = () => {
             if (scanning) return;
             setScanning(true); 
-            addLog(`SYSTEM STARTED: Scanning Binance Market`, "success");
+            addLog(`SYSTEM STARTED: Binance Market Orders`, "success");
             
             TRADING_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 500); });
             
