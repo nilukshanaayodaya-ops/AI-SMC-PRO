@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI SMC Pro (Binance Market Orders)</title>
+    <title>AI SMC Pro (Commercial Node)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -95,12 +95,13 @@
             CheckCircle, XCircle, AlertTriangle, Cpu, DollarSign, Database, 
             Trash2, Filter, Search, LogOut, History, LayoutDashboard, User, List,
             Zap, Shield, BarChart2, Wallet, Lock, Unlock, Target, Layers, PauseCircle,
-            RefreshCw, SkipForward, Globe, Check, Flame, Crosshair, BarChart4, RotateCcw
+            RefreshCw, SkipForward, Globe, Check, Flame, Crosshair, BarChart4, RotateCcw,
+            KeyRound
         } from 'https://esm.sh/lucide-react@0.344.0';
 
         // --- FIREBASE IMPORTS ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         // --- FIREBASE CONFIGURATION ---
@@ -118,10 +119,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id';
-
         // --- APP CONFIGURATION ---
-        // BINANCE FUTURES PAIRS ONLY
         const FUTURES_PAIRS = [
           'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 
           'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
@@ -146,7 +144,6 @@
           const [authLoading, setAuthLoading] = useState(true);
           const [email, setEmail] = useState('');
           const [password, setPassword] = useState('');
-          const [isLoginView, setIsLoginView] = useState(true);
           const [authError, setAuthError] = useState('');
 
           const [signals, setSignals] = useState([]);
@@ -170,7 +167,7 @@
               setUser(currentUser);
               setAuthLoading(false);
               if (currentUser) {
-                  addLog(`SMC Node initialized: ${currentUser.email}`, 'success');
+                  addLog(`User Verified: ${currentUser.email}`, 'success');
               }
             });
             return () => unsubscribe();
@@ -186,7 +183,9 @@
 
           useEffect(() => {
             if (!user) { setSignals([]); signalsRef.current = []; return; }
-            const signalsRefFb = collection(db, 'artifacts', appId, 'users', user.uid, 'signals');
+            
+            const signalsRefFb = collection(db, 'users', user.uid, 'signals');
+            
             const unsubscribe = onSnapshot(signalsRefFb, (snapshot) => {
               const loadedSignals = snapshot.docs.map(doc => ({ ...doc.data(), firestoreId: doc.id }));
               loadedSignals.sort((a, b) => b.timestamp - a.timestamp);
@@ -214,7 +213,11 @@
 
             }, (error) => {
               console.error("Firestore Error:", error);
-              addLog("Error syncing data from cloud", 'error');
+              if (error.code === 'permission-denied') {
+                  addLog("Database Permission Denied. Check Rules.", 'error');
+              } else {
+                  addLog("Sync Error. Retrying...", 'warning');
+              }
             });
             return () => unsubscribe();
           }, [user]);
@@ -223,8 +226,8 @@
             e.preventDefault();
             setAuthError('');
             try {
-              if (isLoginView) await signInWithEmailAndPassword(auth, email, password);
-              else await createUserWithEmailAndPassword(auth, email, password);
+              // ONLY LOGIN - Removed Registration
+              await signInWithEmailAndPassword(auth, email, password);
             } catch (err) { setAuthError(err.message.replace('Firebase: ', '')); }
           };
 
@@ -239,20 +242,18 @@
               addLog("Resetting system data...", "warning");
               
               try {
-                  // Delete all signals for this user
                   const deletePromises = signals.map(s => 
-                      deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'signals', s.firestoreId))
+                      deleteDoc(doc(db, 'users', user.uid, 'signals', s.firestoreId))
                   );
                   
                   await Promise.all(deletePromises);
                   
-                  // Clear local logs
                   setLogs([]);
                   addLog("System reset complete. Data cleared.", "success");
                   
               } catch (err) {
                   console.error("Error clearing data:", err);
-                  addLog("Error resetting data.", "error");
+                  addLog("Error resetting data. Check Permissions.", "error");
               }
           };
 
@@ -260,7 +261,7 @@
           const skipTrade = async (signalId, symbol) => {
               if (!user || !signalId) return;
               try {
-                  const sigRef = doc(db, 'artifacts', appId, 'users', user.uid, 'signals', signalId);
+                  const sigRef = doc(db, 'users', user.uid, 'signals', signalId);
                   await updateDoc(sigRef, { status: 'SKIPPED' });
                   addLog(`Skipped: ${symbol}.`, 'warning');
                   processingTradeRef.current = false; 
@@ -315,7 +316,7 @@
 
               if (shouldUpdate && signal.firestoreId) {
                 try {
-                  const sigRef = doc(db, 'artifacts', appId, 'users', user.uid, 'signals', signal.firestoreId);
+                  const sigRef = doc(db, 'users', user.uid, 'signals', signal.firestoreId);
                   await updateDoc(sigRef, { status: newStatus, closePrice: closePrice || null });
                   addLog(logMsg, logType);
                 } catch (err) { console.error("Error updating signal:", err); }
@@ -403,11 +404,14 @@
                       timestamp: Date.now(), 
                       mode: 'MARKET_ORDER'
                   };
-                  await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'signals'), newSignal);
+                  await addDoc(collection(db, 'users', user.uid, 'signals'), newSignal);
                   addLog(`MARKET EXECUTION: ${symbol} (${signalData.type})`, 'success');
               }
             } catch (err) { 
                 console.error(`Analysis failed for ${symbol}`, err);
+                if (err.code === 'permission-denied') {
+                     addLog("Permission Denied: Check Firebase Rules", 'error');
+                }
             }
           };
 
@@ -448,14 +452,47 @@
           if (!user) {
             return (
               <div className="min-h-screen bg-dark-900 flex items-center justify-center p-4">
-                <div className="glass-panel p-8 rounded-2xl max-w-md w-full border border-white/10">
-                  <h1 className="text-2xl font-bold text-white mb-6 text-center">AI <span className="text-brand-green">SMC</span> TRADER</h1>
+                <div className="glass-panel p-8 rounded-2xl max-w-md w-full border border-white/10 relative overflow-hidden">
+                   <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-green via-brand-blue to-brand-green opacity-50"></div>
+                  
+                  <div className="text-center mb-6">
+                    <div className="w-16 h-16 bg-brand-green/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-brand-green/30">
+                        <Lock size={32} className="text-brand-green"/>
+                    </div>
+                    <h1 className="text-2xl font-bold text-white tracking-tight">AI SMC <span className="text-brand-green">NODE</span></h1>
+                    <p className="text-gray-500 text-xs mt-2 uppercase tracking-widest">Authorized Access Only</p>
+                  </div>
+                  
                   <form onSubmit={handleAuth} className="space-y-4">
-                    <input type="email" required className="w-full bg-dark-800 p-3 rounded text-white border border-dark-600 focus:border-brand-green outline-none" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
-                    <input type="password" required className="w-full bg-dark-800 p-3 rounded text-white border border-dark-600 focus:border-brand-green outline-none" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-                    <button type="submit" className="w-full bg-brand-green text-dark-900 font-bold py-3 rounded hover:bg-emerald-400 transition">{isLoginView ? 'LOGIN TO AUTO-START' : 'REGISTER NODE'}</button>
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-500 font-bold uppercase ml-1">Access ID</label>
+                        <div className="relative">
+                            <User className="absolute left-3 top-3 text-gray-500" size={16}/>
+                            <input type="email" required className="w-full bg-dark-800 p-3 pl-10 rounded text-white border border-dark-600 focus:border-brand-green outline-none transition-all placeholder-gray-700 text-sm" placeholder="user@node.com" value={email} onChange={e=>setEmail(e.target.value)} />
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-[10px] text-gray-500 font-bold uppercase ml-1">Secure Key</label>
+                        <div className="relative">
+                            <KeyRound className="absolute left-3 top-3 text-gray-500" size={16}/>
+                            <input type="password" required className="w-full bg-dark-800 p-3 pl-10 rounded text-white border border-dark-600 focus:border-brand-green outline-none transition-all placeholder-gray-700 text-sm" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} />
+                        </div>
+                    </div>
+                    
+                    {authError && (
+                        <div className="bg-brand-red/10 text-brand-red p-2 rounded text-xs border border-brand-red/20 flex items-center gap-2">
+                            <AlertTriangle size={14}/> {authError}
+                        </div>
+                    )}
+                    
+                    <button type="submit" className="w-full bg-brand-green text-dark-900 font-bold py-3 rounded hover:bg-emerald-400 transition shadow-[0_0_15px_rgba(0,255,148,0.3)] mt-2">
+                        INITIALIZE NODE
+                    </button>
                   </form>
-                  <button onClick={() => setIsLoginView(!isLoginView)} className="w-full text-center text-xs text-gray-500 mt-4 hover:text-white">{isLoginView ? 'Create Account' : 'Login'}</button>
+                  
+                  <div className="mt-6 text-center border-t border-white/5 pt-4">
+                    <p className="text-[10px] text-gray-600">Restricted System • IP Logged</p>
+                  </div>
                 </div>
               </div>
             );
@@ -487,7 +524,7 @@
                     </div>
                  </div>
                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2 bg-dark-800 border border-white/5 px-3 py-1.5 rounded text-[10px] font-bold text-brand-green">
+                    <div className="hidden md:flex items-center gap-2 bg-dark-800 border border-white/5 px-3 py-1.5 rounded text-[10px] font-bold text-brand-green">
                         <Globe size={12} className="animate-spin"/>
                         MARKET ORDERS
                     </div>
