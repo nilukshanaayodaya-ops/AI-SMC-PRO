@@ -95,13 +95,13 @@
             CheckCircle, XCircle, AlertTriangle, Cpu, DollarSign, Database, 
             Trash2, Filter, Search, LogOut, History, LayoutDashboard, User, List,
             Zap, Shield, BarChart2, Wallet, Lock, Unlock, Target, Layers, PauseCircle,
-            RefreshCw, SkipForward, Globe, Check, Flame, Crosshair, BarChart4
+            RefreshCw, SkipForward, Globe, Check, Flame, Crosshair, BarChart4, RotateCcw
         } from 'https://esm.sh/lucide-react@0.344.0';
 
         // --- FIREBASE IMPORTS ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         // --- FIREBASE CONFIGURATION ---
         const firebaseConfig = {
@@ -229,6 +229,32 @@
           };
 
           const handleLogout = async () => { stopScanner(); await signOut(auth); };
+
+          // --- DATA MANAGEMENT ---
+          const handleResetData = async () => {
+              if (!window.confirm("⚠️ WARNING: This will delete ALL trade history, win rates, and logs. This cannot be undone. Are you sure?")) {
+                  return;
+              }
+              
+              addLog("Resetting system data...", "warning");
+              
+              try {
+                  // Delete all signals for this user
+                  const deletePromises = signals.map(s => 
+                      deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'signals', s.firestoreId))
+                  );
+                  
+                  await Promise.all(deletePromises);
+                  
+                  // Clear local logs
+                  setLogs([]);
+                  addLog("System reset complete. Data cleared.", "success");
+                  
+              } catch (err) {
+                  console.error("Error clearing data:", err);
+                  addLog("Error resetting data.", "error");
+              }
+          };
 
           // --- SKIP FUNCTIONALITY ---
           const skipTrade = async (signalId, symbol) => {
@@ -465,6 +491,10 @@
                         <Globe size={12} className="animate-spin"/>
                         MARKET ORDERS
                     </div>
+                    {/* RESET DATA BUTTON */}
+                    <button onClick={handleResetData} title="Clear All History" className="p-2 text-brand-red hover:bg-brand-red/10 rounded transition-colors border border-brand-red/20">
+                        <Trash2 size={16}/>
+                    </button>
                     <button onClick={handleLogout} className="p-2 text-gray-500 hover:text-white"><LogOut size={16}/></button>
                  </div>
               </header>
