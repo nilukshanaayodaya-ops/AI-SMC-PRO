@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI SMC Crypto Auto Trader</title>
+    <title>AI SMC Pro (Binance Market Orders)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -33,8 +33,12 @@
                             green: '#00FF94',
                             red: '#FF3B30',
                             blue: '#007AFF',
-                            yellow: '#FFCC00'
+                            yellow: '#FFCC00',
+                            purple: '#BF5AF2'
                         }
+                    },
+                    animation: {
+                        'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
                     }
                 }
             }
@@ -69,10 +73,6 @@
             border: 1px solid rgba(255, 255, 255, 0.05);
         }
         
-        .glow-text {
-            text-shadow: 0 0 20px rgba(0, 255, 148, 0.3);
-        }
-
         .animate-fade-in {
             animation: fadeIn 0.5s ease-out;
         }
@@ -94,7 +94,8 @@
             TrendingUp, TrendingDown, Activity, PlayCircle, StopCircle, Clock, 
             CheckCircle, XCircle, AlertTriangle, Cpu, DollarSign, Database, 
             Trash2, Filter, Search, LogOut, History, LayoutDashboard, User, List,
-            Zap, Shield, BarChart2, Wallet
+            Zap, Shield, BarChart2, Wallet, Lock, Unlock, Target, Layers, PauseCircle,
+            RefreshCw, SkipForward, Globe, Check, Flame, Crosshair, BarChart4
         } from 'https://esm.sh/lucide-react@0.344.0';
 
         // --- FIREBASE IMPORTS ---
@@ -120,13 +121,24 @@
         const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id';
 
         // --- APP CONFIGURATION ---
-        const TRADING_PAIRS = [
+        // BINANCE FUTURES PAIRS ONLY
+        const FUTURES_PAIRS = [
           'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 
-          'ADAUSDT', 'DOGEUSDT', 'MATICUSDT', 'DOTUSDT', 'LTCUSDT'
+          'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
+          'DOTUSDT', 'TRXUSDT', 'LTCUSDT', 'SHIBUSDT', 'UNIUSDT',
+          'ATOMUSDT', 'ETCUSDT', 'FILUSDT', 'NEARUSDT', 'ALGOUSDT',
+          'ICPUSDT', 'BCHUSDT', 'VETUSDT', 'FTMUSDT', 'SANDUSDT',
+          'MANAUSDT', 'APEUSDT', 'AXSUSDT', 'EGLDUSDT', 'THETAUSDT',
+          'AAVEUSDT', 'EOSUSDT', 'RUNEUSDT', 'GALAUSDT', 'OPUSDT',
+          'ARBUSDT', 'APTUSDT', 'LDOUSDT', 'PEPEUSDT', 'SUIUSDT',
+          'RNDRUSDT', 'INJUSDT', 'STXUSDT', 'CFXUSDT', 'AGIXUSDT',
+          'WLDUSDT', 'TIAUSDT', 'SEIUSDT', 'ORDIUSDT', 'BONKUSDT',
+          'WIFUSDT', 'STRKUSDT', 'PYTHUSDT', 'JTOUSDT', 'MEMEUSDT',
+          'JUPUSDT', 'DYDXUSDT', 'IMXUSDT', 'SNXUSDT', 'CRVUSDT'
         ];
 
         const BINANCE_API = 'https://api.binance.com/api/v3';
-        const COOLDOWN_PERIOD = 30 * 60 * 1000; // Reduced to 30 mins for Scalping
+        const TIMEFRAME = '5m'; 
 
         const CryptoAutoTrader = () => {
           // --- STATE ---
@@ -141,36 +153,65 @@
           const [prices, setPrices] = useState({});
           const [scanning, setScanning] = useState(false);
           const [logs, setLogs] = useState([]);
-          const [stats, setStats] = useState({ wins: 0, losses: 0, active: 0, pending: 0 });
-          const [viewFilter, setViewFilter] = useState('ALL'); 
-          const [signalSearchTerm, setSignalSearchTerm] = useState('');
-          const [activeTab, setActiveTab] = useState('DASHBOARD');
+          const [stats, setStats] = useState({ wins: 0, losses: 0, active: 0, skipped: 0 });
+          
+          const [tradeTab, setTradeTab] = useState('RUNNING'); 
+          const [isRecoveryMode, setIsRecoveryMode] = useState(false);
 
           const scanIntervalRef = useRef(null);
           const priceIntervalRef = useRef(null);
+          
+          const processingTradeRef = useRef(false);
+          const signalsRef = useRef([]); 
 
           // --- LOGIC ---
           useEffect(() => {
             const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
               setUser(currentUser);
               setAuthLoading(false);
-              if (currentUser) addLog(`User logged in: ${currentUser.email}`, 'success');
+              if (currentUser) {
+                  addLog(`SMC Node initialized: ${currentUser.email}`, 'success');
+              }
             });
             return () => unsubscribe();
           }, []);
 
           useEffect(() => {
-            if (!user) { setSignals([]); return; }
-            const signalsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'signals');
-            const unsubscribe = onSnapshot(signalsRef, (snapshot) => {
+              if (user && !scanning) {
+                  startScanner();
+              } else if (!user && scanning) {
+                  stopScanner();
+              }
+          }, [user]);
+
+          useEffect(() => {
+            if (!user) { setSignals([]); signalsRef.current = []; return; }
+            const signalsRefFb = collection(db, 'artifacts', appId, 'users', user.uid, 'signals');
+            const unsubscribe = onSnapshot(signalsRefFb, (snapshot) => {
               const loadedSignals = snapshot.docs.map(doc => ({ ...doc.data(), firestoreId: doc.id }));
               loadedSignals.sort((a, b) => b.timestamp - a.timestamp);
+              
               setSignals(loadedSignals);
+              signalsRef.current = loadedSignals; 
+              
               const wins = loadedSignals.filter(s => s.status === 'WON').length;
               const losses = loadedSignals.filter(s => s.status === 'LOST').length;
               const active = loadedSignals.filter(s => s.status === 'ACTIVE').length;
-              const pending = loadedSignals.filter(s => s.status === 'PENDING').length;
-              setStats({ wins, losses, active, pending });
+              const skipped = loadedSignals.filter(s => s.status === 'SKIPPED').length;
+              
+              setStats({ wins, losses, active, skipped });
+
+              if (active > 0) {
+                  processingTradeRef.current = true; // Lock scanning
+              } else {
+                  processingTradeRef.current = false; // Unlock scanning
+              }
+
+              const closedTrades = loadedSignals.filter(s => s.status === 'WON' || s.status === 'LOST');
+              if (closedTrades.length > 0) {
+                  setIsRecoveryMode(closedTrades[0].status === 'LOST');
+              }
+
             }, (error) => {
               console.error("Firestore Error:", error);
               addLog("Error syncing data from cloud", 'error');
@@ -189,6 +230,19 @@
 
           const handleLogout = async () => { stopScanner(); await signOut(auth); };
 
+          // --- SKIP FUNCTIONALITY ---
+          const skipTrade = async (signalId, symbol) => {
+              if (!user || !signalId) return;
+              try {
+                  const sigRef = doc(db, 'artifacts', appId, 'users', user.uid, 'signals', signalId);
+                  await updateDoc(sigRef, { status: 'SKIPPED' });
+                  addLog(`Skipped: ${symbol}.`, 'warning');
+                  processingTradeRef.current = false; 
+              } catch (err) {
+                  console.error("Error skipping trade:", err);
+              }
+          };
+
           const addLog = (msg, type = 'info') => {
             const timestamp = new Date().toLocaleTimeString();
             setLogs(prev => [{ time: timestamp, msg, type }, ...prev].slice(0, 50));
@@ -199,7 +253,7 @@
               const response = await fetch(`${BINANCE_API}/ticker/price`);
               const data = await response.json();
               const priceMap = {};
-              data.forEach(d => { if (TRADING_PAIRS.includes(d.symbol)) priceMap[d.symbol] = parseFloat(d.price); });
+              data.forEach(d => { if (FUTURES_PAIRS.includes(d.symbol)) priceMap[d.symbol] = parseFloat(d.price); });
               setPrices(priceMap);
               updateSignalStatus(priceMap);
             } catch (err) { console.error("Price fetch error", err); }
@@ -209,7 +263,7 @@
             if (!user) return;
             signals.forEach(async (signal) => {
               const currentPrice = currentPrices[signal.symbol];
-              if (!currentPrice || signal.status === 'WON' || signal.status === 'LOST' || signal.status === 'EXPIRED') return;
+              if (!currentPrice || signal.status === 'WON' || signal.status === 'LOST' || signal.status === 'SKIPPED') return;
 
               let newStatus = signal.status;
               let closePrice = signal.closePrice;
@@ -217,20 +271,19 @@
               let logMsg = '';
               let logType = 'info';
 
-              if (signal.status === 'PENDING') {
-                if ((signal.type === 'LONG' && currentPrice <= signal.entry) || 
-                    (signal.type === 'SHORT' && currentPrice >= signal.entry)) {
-                  newStatus = 'ACTIVE'; shouldUpdate = true; logMsg = `${signal.symbol} Scalp Order Filled! Active.`; logType = 'success';
-                }
-              }
-
               if (newStatus === 'ACTIVE') {
                 if (signal.type === 'LONG') {
-                  if (currentPrice >= signal.tp) { newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} Scalp TP Hit!`; logType = 'success'; }
-                  else if (currentPrice <= signal.sl) { newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL Hit.`; logType = 'error'; }
+                  if (currentPrice >= signal.tp) { 
+                      newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} TP HIT! SMC Win.`; logType = 'success'; 
+                  } else if (currentPrice <= signal.sl) { 
+                      newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL HIT.`; logType = 'error'; 
+                  }
                 } else { 
-                  if (currentPrice <= signal.tp) { newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} Scalp TP Hit!`; logType = 'success'; }
-                  else if (currentPrice >= signal.sl) { newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL Hit.`; logType = 'error'; }
+                  if (currentPrice <= signal.tp) { 
+                      newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} TP HIT! SMC Win.`; logType = 'success'; 
+                  } else if (currentPrice >= signal.sl) { 
+                      newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL HIT.`; logType = 'error'; 
+                  }
                 }
               }
 
@@ -244,105 +297,95 @@
             });
           };
 
-          // --- AI ANALYSIS ENGINE (UPDATED FOR SCALPING) ---
+          // --- SMC STRATEGY: LIQUIDITY SWEEPS (SFP) ---
           const analyzePair = async (symbol) => {
             if (!user) return;
-            const hasActive = signals.some(s => s.symbol === symbol && ['PENDING', 'ACTIVE'].includes(s.status));
-            if (hasActive) return;
-            const lastSignal = signals.find(s => s.symbol === symbol); 
-            if (lastSignal) { if (Date.now() - lastSignal.timestamp < COOLDOWN_PERIOD) return; }
+            if (processingTradeRef.current) return;
+            
+            const hasActive = signalsRef.current.some(s => s.status === 'ACTIVE');
+            if (hasActive) {
+                processingTradeRef.current = true; 
+                return;
+            }
 
             try {
-              // 15m candles are stable for scalping analysis, entry will be on pullbacks
-              const res = await fetch(`${BINANCE_API}/klines?symbol=${symbol}&interval=15m&limit=50`);
+              // 100 Candles to find structure
+              const res = await fetch(`${BINANCE_API}/klines?symbol=${symbol}&interval=${TIMEFRAME}&limit=100`);
               const rawData = await res.json();
-              const candles = rawData.map(c => ({ open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), vol: parseFloat(c[5]) }));
-              const last = candles[candles.length - 1];
-              const closes = candles.map(c => c.close);
+              const candles = rawData.map(c => ({ 
+                  open: parseFloat(c[1]), 
+                  high: parseFloat(c[2]), 
+                  low: parseFloat(c[3]), 
+                  close: parseFloat(c[4]), 
+                  vol: parseFloat(c[5]) 
+              }));
               
-              // INDICATORS
-              const ema20 = calculateEMA(closes, 20);
-              const ema50 = calculateEMA(closes, 50);
-              const rsi = calculateRSI(candles, 14);
+              if (candles.length < 50) return;
+
+              const last = candles[candles.length - 1]; // Current Candle (Live)
+              const prev = candles[candles.length - 2]; // Completed Candle
+              
+              const currentPrice = last.close;
               const atr = calculateATR(candles, 14);
 
-              const isUptrend = ema20 > ema50;
-              const isDowntrend = ema20 < ema50;
-              
               let signalData = null;
 
-              // LONG SCALP STRATEGY: 
-              // 1. Strong Uptrend (EMA20 > EMA50)
-              // 2. RSI is not overbought (RSI < 70) and healthy (RSI > 45)
-              // 3. Price is pulling back to EMA20 (Discount)
-              if (isUptrend && rsi < 70 && rsi > 45) {
-                // Entry near EMA 20
-                const entryPrice = ema20; 
-                
-                // Only take if current price is close to EMA (within 0.5%)
-                const diff = Math.abs(last.close - entryPrice) / last.close;
-                
-                if (diff < 0.005 || last.close < entryPrice) {
-                    const sl = entryPrice - (atr * 1.5); // Tight SL for scalping
-                    const tp = entryPrice + (atr * 2.5); // 1.5R - 2R Target
-                    signalData = { type: 'LONG', entry: entryPrice, sl, tp, reason: "Uptrend Scalp + RSI Reset" };
-                }
-              } 
-              // SHORT SCALP STRATEGY:
-              // 1. Strong Downtrend
-              // 2. RSI is not oversold (RSI > 30) and healthy (RSI < 55)
-              // 3. Price is rallying to EMA20 (Premium)
-              else if (isDowntrend && rsi > 30 && rsi < 55) {
-                 const entryPrice = ema20;
-                 
-                 const diff = Math.abs(last.close - entryPrice) / last.close;
-                 
-                 if (diff < 0.005 || last.close > entryPrice) {
-                     const sl = entryPrice + (atr * 1.5);
-                     const tp = entryPrice - (atr * 2.5);
-                     signalData = { type: 'SHORT', entry: entryPrice, sl, tp, reason: "Downtrend Scalp + Supply Zone" };
-                 }
+              const LOOKBACK = 15;
+              let swingHigh = -Infinity;
+              let swingLow = Infinity;
+
+              for (let i = candles.length - 3; i > candles.length - 3 - LOOKBACK; i--) {
+                  if (candles[i].high > swingHigh) swingHigh = candles[i].high;
+                  if (candles[i].low < swingLow) swingLow = candles[i].low;
               }
 
-              if (signalData) {
-                  // High Accuracy Filter: Check recent volume
-                  const avgVol = candles.slice(-5).reduce((a,b) => a + b.vol, 0) / 5;
-                  if (last.vol > avgVol * 0.8) { // Only if volume is decent
-                    const newSignal = {
-                        symbol, type: signalData.type, entry: parseFloat(signalData.entry.toFixed(4)), sl: parseFloat(signalData.sl.toFixed(4)), tp: parseFloat(signalData.tp.toFixed(4)),
-                        status: 'PENDING', reason: signalData.reason, timestamp: Date.now(), riskReward: "1:1.6"
-                    };
-                    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'signals'), newSignal);
-                    addLog(`High Accuracy Scalp: ${signalData.type} ${symbol}`, 'success');
+              // LONG SETUP: MARKET ORDER
+              if (prev.low < swingLow && prev.close > swingLow) {
+                  if (last.close > prev.low) {
+                      const slDist = atr * 1.5;
+                      const sl = prev.low - (atr * 0.2); 
+                      const tp = currentPrice + (Math.abs(currentPrice - sl) * 1.5); 
+                      
+                      signalData = { type: 'LONG', entry: currentPrice, sl, tp, reason: "MARKET BUY: Liquidity Sweep" };
                   }
               }
-            } catch (err) { console.error(`Analysis failed for ${symbol}`, err); }
+
+              // SHORT SETUP: MARKET ORDER
+              else if (prev.high > swingHigh && prev.close < swingHigh) {
+                  if (last.close < prev.high) {
+                      const sl = prev.high + (atr * 0.2); 
+                      const tp = currentPrice - (Math.abs(sl - currentPrice) * 1.5); 
+                      
+                      signalData = { type: 'SHORT', entry: currentPrice, sl, tp, reason: "MARKET SELL: Liquidity Sweep" };
+                  }
+              }
+
+              if (signalData && !processingTradeRef.current) {
+                  const currentActive = signalsRef.current.some(s => s.status === 'ACTIVE');
+                  if (currentActive) return;
+
+                  processingTradeRef.current = true; 
+                  
+                  const newSignal = {
+                      symbol, 
+                      type: signalData.type, 
+                      entry: parseFloat(signalData.entry.toFixed(4)), 
+                      sl: parseFloat(signalData.sl.toFixed(4)), 
+                      tp: parseFloat(signalData.tp.toFixed(4)),
+                      status: 'ACTIVE', 
+                      reason: signalData.reason, 
+                      timestamp: Date.now(), 
+                      mode: 'MARKET_ORDER'
+                  };
+                  await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'signals'), newSignal);
+                  addLog(`MARKET EXECUTION: ${symbol} (${signalData.type})`, 'success');
+              }
+            } catch (err) { 
+                console.error(`Analysis failed for ${symbol}`, err);
+            }
           };
 
           // --- HELPERS ---
-          const calculateEMA = (data, period) => {
-            const k = 2 / (period + 1);
-            let ema = data[0];
-            for (let i = 1; i < data.length; i++) ema = data[i] * k + ema * (1 - k);
-            return ema;
-          };
-
-          // RSI Calculator
-          const calculateRSI = (candles, period) => {
-             if (candles.length < period + 1) return 50;
-             let gains = 0, losses = 0;
-             for (let i = candles.length - period; i < candles.length; i++) {
-                 const change = candles[i].close - candles[i - 1].close;
-                 if (change > 0) gains += change;
-                 else losses += Math.abs(change);
-             }
-             let avgGain = gains / period;
-             let avgLoss = losses / period;
-             if (avgLoss === 0) return 100;
-             const rs = avgGain / avgLoss;
-             return 100 - (100 / (1 + rs));
-          };
-
           const calculateATR = (candles, period) => {
             let trSum = 0;
             for (let i = 1; i < candles.length; i++) {
@@ -354,423 +397,186 @@
 
           const startScanner = () => {
             if (scanning) return;
-            setScanning(true); addLog("Starting AI Scalp Scanner...", "info");
-            TRADING_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 500); });
-            scanIntervalRef.current = setInterval(() => { addLog("Scanning for Scalps...", "info"); TRADING_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 1000); }); }, 60000);
+            setScanning(true); 
+            addLog(`SYSTEM STARTED: Binance Market Orders`, "success");
+            
+            FUTURES_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 500); });
+            
+            scanIntervalRef.current = setInterval(() => { 
+                const hasActive = signalsRef.current.some(s => s.status === 'ACTIVE');
+                if (!hasActive && !processingTradeRef.current) {
+                    addLog(`Scanning Binance Futures (${FUTURES_PAIRS.length} pairs)...`, "info"); 
+                    FUTURES_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 800); }); 
+                }
+            }, 15000); 
+            
             priceIntervalRef.current = setInterval(fetchPrices, 3000);
           };
 
           const stopScanner = () => { setScanning(false); clearInterval(scanIntervalRef.current); clearInterval(priceIntervalRef.current); addLog("Scanner Stopped.", "warning"); };
 
-          const clearHistory = async () => { addLog("Clearing history not fully supported in Cloud Mode to prevent data loss.", "warning"); };
-          const toggleActiveFilter = () => { setViewFilter(prev => prev === 'ALL' ? 'ACTIVE' : 'ALL'); };
-
           // --- UI RENDERING ---
 
-          if (authLoading) {
-            return (
-                <div className="min-h-screen bg-dark-900 flex flex-col items-center justify-center text-brand-green font-mono">
-                    <div className="w-16 h-16 border-4 border-brand-green border-t-transparent rounded-full animate-spin mb-4"></div>
-                    <div className="text-xl tracking-widest animate-pulse">SYSTEM INITIALIZING...</div>
-                </div>
-            );
-          }
+          if (authLoading) return <div className="min-h-screen bg-dark-900 flex items-center justify-center text-brand-green font-mono"><div className="animate-spin text-4xl">✱</div></div>;
 
           if (!user) {
             return (
-              <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-dark-800 via-dark-900 to-black flex items-center justify-center font-sans p-4 relative overflow-hidden">
-                {/* Background Grid */}
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5"></div>
-                <div className="absolute top-0 left-0 w-full h-full bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:50px_50px]"></div>
-
-                <div className="glass-panel p-10 rounded-2xl max-w-md w-full shadow-2xl relative z-10 animate-fade-in border border-white/10">
-                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-green via-brand-blue to-brand-green opacity-80"></div>
-                  
-                  <div className="text-center mb-8">
-                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-brand-green/10 mb-4 ring-1 ring-brand-green/30 shadow-[0_0_15px_rgba(0,255,148,0.2)]">
-                        <Cpu size={32} className="text-brand-green" />
-                    </div>
-                    <h1 className="text-3xl font-extrabold text-white mb-2 tracking-tight">AI SMC <span className="text-brand-green">TRADER</span></h1>
-                    <p className="text-gray-400 text-sm">Algorithmic Trading Terminal</p>
-                  </div>
-
-                  <form onSubmit={handleAuth} className="space-y-5">
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">Access ID (Email)</label>
-                      <input 
-                        type="email" 
-                        required
-                        className="w-full bg-dark-800/50 border border-dark-600 rounded-lg p-3 text-white focus:border-brand-green focus:ring-1 focus:ring-brand-green focus:outline-none transition-all placeholder-gray-600"
-                        placeholder="trader@example.com"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">Security Key</label>
-                      <input 
-                        type="password" 
-                        required
-                        className="w-full bg-dark-800/50 border border-dark-600 rounded-lg p-3 text-white focus:border-brand-green focus:ring-1 focus:ring-brand-green focus:outline-none transition-all placeholder-gray-600"
-                        placeholder="••••••••"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                      />
-                    </div>
-
-                    {authError && (
-                      <div className="bg-brand-red/10 border border-brand-red/30 p-3 rounded-lg text-brand-red text-xs flex items-center gap-2">
-                        <AlertTriangle size={14}/> {authError}
-                      </div>
-                    )}
-
-                    <button type="submit" className="w-full bg-gradient-to-r from-brand-green to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-dark-900 font-bold py-3.5 rounded-lg shadow-lg shadow-brand-green/20 transform active:scale-95 transition-all">
-                      {isLoginView ? 'CONNECT TO TERMINAL' : 'REGISTER NEW NODE'}
-                    </button>
+              <div className="min-h-screen bg-dark-900 flex items-center justify-center p-4">
+                <div className="glass-panel p-8 rounded-2xl max-w-md w-full border border-white/10">
+                  <h1 className="text-2xl font-bold text-white mb-6 text-center">AI <span className="text-brand-green">SMC</span> TRADER</h1>
+                  <form onSubmit={handleAuth} className="space-y-4">
+                    <input type="email" required className="w-full bg-dark-800 p-3 rounded text-white border border-dark-600 focus:border-brand-green outline-none" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
+                    <input type="password" required className="w-full bg-dark-800 p-3 rounded text-white border border-dark-600 focus:border-brand-green outline-none" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
+                    <button type="submit" className="w-full bg-brand-green text-dark-900 font-bold py-3 rounded hover:bg-emerald-400 transition">{isLoginView ? 'LOGIN TO AUTO-START' : 'REGISTER NODE'}</button>
                   </form>
-
-                  <div className="mt-8 text-center">
-                    <button 
-                      onClick={() => setIsLoginView(!isLoginView)}
-                      className="text-xs text-gray-500 hover:text-brand-green transition-colors font-medium"
-                    >
-                      {isLoginView ? 'New User? Initialize Setup' : 'Existing User? Secure Login'}
-                    </button>
-                  </div>
+                  <button onClick={() => setIsLoginView(!isLoginView)} className="w-full text-center text-xs text-gray-500 mt-4 hover:text-white">{isLoginView ? 'Create Account' : 'Login'}</button>
                 </div>
               </div>
             );
           }
 
-          let contentToRender = null;
+          const activeSignals = signals.filter(s => s.status === 'ACTIVE');
+          const hasActiveTrade = activeSignals.length > 0;
+          const wonSignals = signals.filter(s => s.status === 'WON');
+          const lostSignals = signals.filter(s => s.status === 'LOST');
+          const skippedSignals = signals.filter(s => s.status === 'SKIPPED');
 
-          if (activeTab === 'HISTORY') {
-             const completedTrades = signals.filter(s => s.status === 'WON' || s.status === 'LOST');
-             const pendingOrders = signals.filter(s => s.status === 'PENDING');
-
-             contentToRender = (
-                <div className="space-y-8 animate-fade-in">
-                    {/* COMPLETED SECTION */}
-                    <div className="glass-panel rounded-xl p-5 border-l-4 border-brand-blue">
-                        <div className="flex items-center gap-3 mb-5 border-b border-white/5 pb-3">
-                            <div className="p-2 bg-brand-blue/10 rounded-lg"><CheckCircle size={18} className="text-brand-blue"/></div>
-                            <h4 className="text-sm font-bold text-gray-200">EXECUTION HISTORY (COMPLETED)</h4>
-                        </div>
-                        <div className="space-y-3">
-                            {completedTrades.length === 0 && <p className="text-gray-500 text-xs italic p-4 text-center">No completed records found.</p>}
-                            {completedTrades.map(signal => (
-                                <div key={signal.firestoreId || signal.id} className="bg-dark-800/50 hover:bg-dark-800 border border-white/5 p-4 rounded-lg flex justify-between items-center transition-all group">
-                                   <div className="flex items-center gap-4">
-                                      <div className={`w-2 h-2 rounded-full ${signal.status === 'WON' ? 'bg-brand-green shadow-[0_0_10px_rgba(0,255,148,0.5)]' : 'bg-brand-red shadow-[0_0_10px_rgba(255,59,48,0.5)]'}`}></div>
-                                      <div>
-                                        <div className="flex gap-2 items-center">
-                                          <span className="font-bold text-white font-mono text-lg">{signal.symbol}</span>
-                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${signal.type === 'LONG' ? 'bg-brand-green/20 text-brand-green' : 'bg-brand-red/20 text-brand-red'}`}>{signal.type}</span>
-                                        </div>
-                                        <span className="text-xs text-gray-500 font-mono">{new Date(signal.timestamp).toLocaleDateString()} {new Date(signal.timestamp).toLocaleTimeString()}</span>
-                                      </div>
-                                   </div>
-                                   <div className="text-right">
-                                      <span className={`text-sm font-bold ${signal.status === 'WON' ? 'text-brand-green' : 'text-brand-red'}`}>
-                                        {signal.status === 'WON' ? '+ TP HIT' : '- SL HIT'}
-                                      </span>
-                                      <span className="block text-gray-500 text-[10px] uppercase mt-1">Closed</span>
-                                   </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* PENDING SECTION */}
-                    <div className="glass-panel rounded-xl p-5 border-l-4 border-brand-yellow">
-                        <div className="flex items-center gap-3 mb-5 border-b border-white/5 pb-3">
-                            <div className="p-2 bg-brand-yellow/10 rounded-lg"><Clock size={18} className="text-brand-yellow"/></div>
-                            <h4 className="text-sm font-bold text-gray-200">WAITING FOR ENTRY (LIMIT ORDERS)</h4>
-                        </div>
-                        <div className="space-y-3">
-                            {pendingOrders.length === 0 && <p className="text-gray-500 text-xs italic p-4 text-center">No pending limit orders.</p>}
-                            {pendingOrders.map(signal => (
-                                <div key={signal.firestoreId || signal.id} className="bg-dark-800/50 border border-brand-yellow/10 p-4 rounded-lg flex justify-between items-center relative overflow-hidden">
-                                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-brand-yellow"></div> 
-                                   <div className="flex items-center gap-4 pl-2">
-                                      <div>
-                                        <div className="flex gap-2 items-center">
-                                          <span className="font-bold text-white font-mono text-lg">{signal.symbol}</span>
-                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${signal.type === 'LONG' ? 'bg-brand-green/20 text-brand-green' : 'bg-brand-red/20 text-brand-red'}`}>{signal.type}</span>
-                                        </div>
-                                        <div className="flex items-center gap-2 mt-1">
-                                            <span className="text-xs text-gray-400 font-mono bg-dark-900 px-2 py-0.5 rounded border border-white/5">Entry: <span className="text-white">{signal.entry}</span></span>
-                                        </div>
-                                      </div>
-                                   </div>
-                                   <div className="text-right">
-                                      <span className="text-brand-yellow font-bold text-sm tracking-wider">WAITING</span>
-                                      <span className="block text-gray-600 text-[10px] mt-1">Limit Order</span>
-                                   </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-             );
-
-          } else {
-             const displayedSignals = signals.filter(s => {
-                if (viewFilter === 'ACTIVE' && s.status !== 'ACTIVE') return false;
-                if (signalSearchTerm && !s.symbol.includes(signalSearchTerm.toUpperCase())) return false;
-                return s.status === 'PENDING' || s.status === 'ACTIVE';
-             });
-
-             contentToRender = (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in">
-                    {displayedSignals.length === 0 && (
-                        <div className="col-span-full text-center py-20 glass-panel rounded-xl border-dashed border-gray-700">
-                            <Activity size={48} className="mx-auto text-gray-700 mb-4"/>
-                            <p className="text-gray-500">No active signals detected. <br/><span className="text-brand-green text-sm">Start the AI Scanner</span> to begin.</p>
-                        </div>
-                    )}
-                    {displayedSignals.map(signal => {
-                        const currentPrice = prices[signal.symbol];
-                        const pnl = (currentPrice && signal.status === 'ACTIVE') 
-                          ? ((currentPrice - signal.entry) / signal.entry) * 100 * (signal.type === 'SHORT' ? -1 : 1) 
-                          : 0;
-
-                        return (
-                            <div key={signal.firestoreId || signal.id} className="glass-panel p-5 rounded-xl hover:bg-white/5 transition-all relative group overflow-hidden">
-                                {/* Status Indicator Strip */}
-                                <div className={`absolute top-0 left-0 w-full h-1 ${
-                                    signal.status === 'WON' ? 'bg-brand-green' : 
-                                    signal.status === 'LOST' ? 'bg-brand-red' :
-                                    signal.status === 'ACTIVE' ? 'bg-brand-blue animate-pulse' : 'bg-brand-yellow'
-                                }`}></div>
-
-                                <div className="flex justify-between items-start mb-4">
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xl font-bold text-white font-mono tracking-tight">{signal.symbol}</span>
-                                            <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-sm ${signal.type === 'LONG' ? 'bg-brand-green text-dark-900' : 'bg-brand-red text-white'}`}>{signal.type}</span>
-                                        </div>
-                                        <p className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Zap size={10} className="text-brand-yellow"/> {signal.reason}</p>
-                                    </div>
-                                    <div className="text-right">
-                                        {signal.status === 'ACTIVE' ? (
-                                            <div className="flex flex-col items-end">
-                                                <span className={`text-2xl font-bold font-mono ${pnl >= 0 ? 'text-brand-green' : 'text-brand-red'}`}>
-                                                    {pnl > 0 ? '+' : ''}{pnl.toFixed(2)}%
-                                                </span>
-                                                <span className="text-[10px] text-gray-500 uppercase tracking-widest">Unrealized PNL</span>
-                                            </div>
-                                        ) : (
-                                            <span className="px-3 py-1 rounded-full bg-brand-yellow/10 text-brand-yellow border border-brand-yellow/20 text-xs font-bold">WAITING</span>
-                                        )}
-                                    </div>
-                                </div>
-                                
-                                {signal.status === 'ACTIVE' && (
-                                    <div className="w-full bg-dark-700 h-1.5 mt-2 mb-4 rounded-full overflow-hidden">
-                                        <div className={`h-full transition-all duration-1000 ${pnl >= 0 ? 'bg-brand-green' : 'bg-brand-red'}`} style={{width: `${Math.min(Math.abs(pnl)*10, 100)}%`}}></div>
-                                    </div>
-                                )}
-
-                                <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-white/5">
-                                    <div className="bg-dark-800 rounded p-2 text-center">
-                                        <span className="text-[10px] text-gray-500 block uppercase">Entry</span>
-                                        <span className="text-brand-blue font-mono font-bold">{signal.entry}</span>
-                                    </div>
-                                    <div className="bg-dark-800 rounded p-2 text-center">
-                                        <span className="text-[10px] text-gray-500 block uppercase">Stop</span>
-                                        <span className="text-brand-red font-mono font-bold">{signal.sl}</span>
-                                    </div>
-                                    <div className="bg-dark-800 rounded p-2 text-center">
-                                        <span className="text-[10px] text-gray-500 block uppercase">Target</span>
-                                        <span className="text-brand-green font-mono font-bold">{signal.tp}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-             );
-          }
+          let displayedList = [];
+          if (tradeTab === 'RUNNING') displayedList = activeSignals;
+          if (tradeTab === 'WON') displayedList = wonSignals;
+          if (tradeTab === 'LOST') displayedList = lostSignals;
+          if (tradeTab === 'SKIPPED') displayedList = skippedSignals;
 
           return (
-            <div className="min-h-screen bg-dark-900 text-gray-300 font-sans selection:bg-brand-green selection:text-dark-900">
-              
-              {/* TOP NAVIGATION BAR */}
-              <header className="sticky top-0 z-50 glass-panel border-b border-white/5 shadow-lg">
-                  <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                       <div className="bg-brand-green/20 p-2 rounded-lg">
-                           <Cpu className="text-brand-green animate-pulse" size={20} />
-                       </div>
-                       <div>
-                           <h1 className="text-lg font-bold text-white tracking-tight leading-none">AI SMC <span className="text-brand-green">PRO</span></h1>
-                           <div className="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse"></span>
-                                CLOUD V.3 • {user.email}
-                           </div>
-                       </div>
+            <div className="min-h-screen bg-dark-900 text-gray-300 font-sans">
+              <header className="sticky top-0 z-50 glass-panel border-b border-white/5 h-16 flex items-center justify-between px-4">
+                 <div className="flex items-center gap-3">
+                    <div className="bg-brand-green/20 p-2 rounded"><BarChart4 className="text-brand-green" size={18} /></div>
+                    <div>
+                        <h1 className="text-base font-bold text-white">AI SMC <span className="text-brand-green">PRO</span></h1>
+                        <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                           <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse-fast"></span>
+                           {hasActiveTrade ? 'MANAGING SMC TRADE' : 'SCANNING LIQUIDITY'}
+                        </div>
                     </div>
-                    
-                    <div className="flex items-center gap-3">
-                       <div className="hidden md:flex bg-dark-800 rounded-lg p-1 border border-white/5">
-                           <button 
-                             onClick={() => setActiveTab('DASHBOARD')}
-                             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'DASHBOARD' ? 'bg-dark-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                           >
-                             <LayoutDashboard size={14} /> DASHBOARD
-                           </button>
-                           <button 
-                             onClick={() => setActiveTab('HISTORY')}
-                             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'HISTORY' ? 'bg-dark-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-                           >
-                             <History size={14} /> HISTORY
-                           </button>
-                       </div>
-
-                       <div className="h-6 w-px bg-white/10 mx-1"></div>
-
-                       {!scanning ? (
-                         <button onClick={startScanner} className="flex items-center gap-2 bg-brand-green hover:bg-emerald-400 text-dark-900 px-4 py-2 rounded-lg font-bold text-xs transition-all shadow-[0_0_15px_rgba(0,255,148,0.2)]">
-                           <PlayCircle size={16} /> START
-                         </button>
-                       ) : (
-                         <button onClick={stopScanner} className="flex items-center gap-2 bg-dark-800 hover:bg-dark-700 text-brand-red border border-brand-red/50 px-4 py-2 rounded-lg font-bold text-xs transition-all">
-                           <StopCircle size={16} /> STOP
-                         </button>
-                       )}
-                       <button onClick={handleLogout} className="p-2 text-gray-500 hover:text-white hover:bg-white/5 rounded-lg transition-all" title="Logout"><LogOut size={18}/></button>
+                 </div>
+                 <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 bg-dark-800 border border-white/5 px-3 py-1.5 rounded text-[10px] font-bold text-brand-green">
+                        <Globe size={12} className="animate-spin"/>
+                        MARKET ORDERS
                     </div>
-                  </div>
+                    <button onClick={handleLogout} className="p-2 text-gray-500 hover:text-white"><LogOut size={16}/></button>
+                 </div>
               </header>
 
-              <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-                  
-                  {/* STATS ROW */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                     <div className="glass-panel p-4 rounded-xl relative overflow-hidden group">
-                         <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity"><Activity size={40}/></div>
-                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Win Rate</span>
-                         <h2 className="text-3xl font-mono font-bold text-white mt-1">
-                             {stats.wins + stats.losses > 0 
-                               ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(1) 
-                               : 0}<span className="text-sm text-gray-500">%</span>
-                         </h2>
-                         <div className="w-full bg-dark-700 h-1 mt-3 rounded-full overflow-hidden">
-                             <div className="bg-brand-green h-full" style={{width: `${stats.wins + stats.losses > 0 ? ((stats.wins / (stats.wins + stats.losses)) * 100) : 0}%`}}></div>
-                         </div>
-                     </div>
-                     
-                     <div 
-                        onClick={toggleActiveFilter}
-                        className={`glass-panel p-4 rounded-xl cursor-pointer transition-all hover:bg-white/5 ${viewFilter === 'ACTIVE' && activeTab === 'DASHBOARD' ? 'ring-1 ring-brand-blue shadow-[0_0_15px_rgba(0,122,255,0.2)]' : ''}`}
-                     >
-                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">Active Trades {viewFilter === 'ACTIVE' && <Filter size={10} className="text-brand-blue"/>}</span>
-                         <h2 className="text-3xl font-mono font-bold text-brand-blue mt-1">{stats.active}</h2>
-                         <p className="text-[10px] text-gray-500 mt-2">Running PNL positions</p>
-                     </div>
+              <main className="max-w-7xl mx-auto p-4 space-y-4">
+                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="glass-panel p-4 rounded-xl">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase">Win Rate</span>
+                        <h2 className="text-3xl font-mono font-bold text-white mt-1">
+                            {stats.wins + stats.losses > 0 ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(0) : 0}%
+                        </h2>
+                    </div>
+                    <div className="glass-panel p-4 rounded-xl flex items-center justify-between">
+                        <div>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase">Status</span>
+                            <h2 className={`text-xl font-mono font-bold mt-1 ${hasActiveTrade ? 'text-brand-blue' : 'text-brand-green'}`}>
+                                {hasActiveTrade ? 'ACTIVE' : 'SCANNING'}
+                            </h2>
+                            <p className="text-[10px] text-gray-500">Binance Futures</p>
+                        </div>
+                        {hasActiveTrade ? <Lock className="text-brand-blue" size={24}/> : <BarChart4 className="text-brand-green" size={24}/>}
+                    </div>
+                    <div className="glass-panel p-4 rounded-xl">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase">Wins</span>
+                        <h2 className="text-3xl font-mono font-bold text-brand-green mt-1">{stats.wins}</h2>
+                    </div>
+                    <div className="glass-panel p-4 rounded-xl">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase">Skipped</span>
+                        <h2 className="text-3xl font-mono font-bold text-gray-400 mt-1">{stats.skipped}</h2>
+                    </div>
+                 </div>
 
-                     <div className="glass-panel p-4 rounded-xl">
-                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Pending Orders</span>
-                         <h2 className="text-3xl font-mono font-bold text-brand-yellow mt-1">{stats.pending}</h2>
-                         <p className="text-[10px] text-gray-500 mt-2">Waiting for entry</p>
-                     </div>
-                     
-                     <div className="glass-panel p-4 rounded-xl">
-                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Total PnL</span>
-                         <h2 className="text-3xl font-mono font-bold text-white mt-1 flex gap-3">
-                             <span className="text-brand-green">{stats.wins}W</span>
-                             <span className="text-brand-red">{stats.losses}L</span>
-                         </h2>
-                         <p className="text-[10px] text-gray-500 mt-2">Realized trades</p>
-                     </div>
-                  </div>
+                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 space-y-4">
+                        <div className="flex gap-2 bg-dark-800/50 p-1 rounded-lg w-fit overflow-x-auto">
+                            {['RUNNING', 'WON', 'LOST', 'SKIPPED'].map(tab => (
+                                <button key={tab} onClick={() => setTradeTab(tab)} className={`px-4 py-2 rounded text-xs font-bold transition-all whitespace-nowrap ${tradeTab === tab ? 'bg-white/10 text-white' : 'text-gray-500'}`}>
+                                    {tab}
+                                </button>
+                            ))}
+                        </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                      
-                      {/* MAIN CONTENT COLUMN */}
-                      <div className="lg:col-span-2 space-y-4">
-                         {/* TOOLBAR */}
-                         <div className="flex flex-col md:flex-row justify-between items-md-center gap-3 pb-2 border-b border-white/5">
-                             <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">
-                               {activeTab === 'DASHBOARD' ? <Zap size={16} className="text-brand-yellow"/> : <Database size={16} className="text-brand-blue"/>} 
-                               {activeTab === 'DASHBOARD' ? 'LIVE MARKET FEED' : 'TRADING LEDGER'}
-                             </h3>
-                             
-                             {activeTab === 'DASHBOARD' && (
-                               <div className="flex items-center gap-2">
-                                   <div className="relative group">
-                                       <input 
-                                          type="text" 
-                                          placeholder="SEARCH PAIR..." 
-                                          value={signalSearchTerm}
-                                          onChange={(e) => setSignalSearchTerm(e.target.value.toUpperCase())}
-                                          className="bg-dark-800 border border-dark-600 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-brand-green pl-9 w-40 transition-all font-mono"
-                                       />
-                                       <Search size={14} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 group-focus-within:text-brand-green" />
-                                   </div>
-                                   {viewFilter === 'ACTIVE' && (
-                                       <button onClick={toggleActiveFilter} className="px-3 py-1.5 rounded-lg bg-brand-blue/10 text-brand-blue text-xs font-bold hover:bg-brand-blue/20 transition-all flex items-center gap-1">
-                                           <XCircle size={12}/> CLEAR
-                                       </button>
-                                   )}
-                               </div>
-                             )}
-                         </div>
-                         
-                         {/* CONTENT RENDERER */}
-                         {contentToRender}
-                      </div>
+                        {hasActiveTrade && tradeTab === 'RUNNING' && (
+                             <div className="p-4 bg-brand-blue/10 border border-brand-blue/30 rounded-lg flex items-center gap-3 animate-pulse">
+                                 <PauseCircle className="text-brand-blue" />
+                                 <span className="text-brand-blue text-xs font-bold">SCANNER PAUSED: Trade active.</span>
+                             </div>
+                        )}
 
-                      {/* SIDEBAR COLUMN */}
-                      <div className="lg:col-span-1 space-y-4">
-                         
-                         {/* SYSTEM LOGS WIDGET */}
-                         <div className="glass-panel rounded-xl flex flex-col h-[400px] overflow-hidden">
-                            <div className="p-3 border-b border-white/5 bg-white/5 flex items-center justify-between">
-                                <div className="flex items-center gap-2 text-xs font-bold text-gray-300">
-                                    <List size={14} className="text-gray-500"/> SYSTEM LOGS
-                                </div>
-                                <div className="w-2 h-2 rounded-full bg-brand-green animate-pulse"></div>
-                            </div>
-                            <div className="flex-1 overflow-y-auto p-3 space-y-3 font-mono text-[10px] custom-scrollbar bg-dark-900/50">
-                                {logs.map((log, i) => (
-                                    <div key={i} className="flex gap-2 border-l-2 border-dark-600 pl-2 py-0.5 hover:border-brand-green transition-colors">
-                                        <span className="text-gray-600 min-w-[60px]">{log.time}</span>
-                                        <span className={`${
-                                            log.type === 'success' ? 'text-brand-green' :
-                                            log.type === 'error' ? 'text-brand-red' :
-                                            log.type === 'warning' ? 'text-brand-yellow' : 'text-gray-400'
-                                        }`}>
-                                            {log.msg}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                         </div>
-                         
-                         {/* WATCHLIST WIDGET */}
-                         <div className="glass-panel rounded-xl p-4">
-                            <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2"><BarChart2 size={12}/> Live Market Data</h3>
-                            <div className="space-y-2">
-                                {TRADING_PAIRS.slice(0, 5).map(pair => (
-                                    <div key={pair} className="flex justify-between items-center p-2 rounded bg-dark-800/50 hover:bg-dark-800 transition-colors cursor-default">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-1 h-4 rounded-full bg-brand-green"></div>
-                                            <span className="text-xs font-bold text-white">{pair.replace('USDT','')}</span>
+                        <div className="space-y-3">
+                            {displayedList.length === 0 && <div className="text-center py-10 text-gray-600 text-sm">No {tradeTab.toLowerCase()} trades.</div>}
+                            {displayedList.map(signal => {
+                                const currentPrice = prices[signal.symbol] || signal.entry;
+                                const pnl = ((currentPrice - signal.entry) / signal.entry) * 100 * (signal.type === 'SHORT' ? -1 : 1);
+                                return (
+                                    <div key={signal.firestoreId} className="glass-panel p-5 rounded-xl border-l-4 border-l-brand-blue hover:bg-white/5 transition relative overflow-hidden">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xl font-bold text-white font-mono">{signal.symbol}</span>
+                                                    <span className={`px-2 text-[10px] font-bold rounded ${signal.type === 'LONG' ? 'bg-brand-green/20 text-brand-green' : 'bg-brand-red/20 text-brand-red'}`}>{signal.type}</span>
+                                                    {signal.mode === 'MARKET_ORDER' && <span className="text-[8px] bg-brand-yellow/10 text-brand-yellow px-1 rounded border border-brand-yellow/20">MARKET</span>}
+                                                </div>
+                                                <div className="text-xs text-gray-500 mt-1">{new Date(signal.timestamp).toLocaleTimeString()} • {signal.reason}</div>
+                                            </div>
+                                            <div className="text-right flex flex-col items-end gap-2">
+                                                {signal.status === 'ACTIVE' ? (
+                                                    <>
+                                                        <span className={`text-2xl font-bold font-mono ${pnl >= 0 ? 'text-brand-green' : 'text-brand-red'}`}>
+                                                            {pnl > 0 ? '+' : ''}{pnl.toFixed(2)}%
+                                                        </span>
+                                                        <button 
+                                                          onClick={() => skipTrade(signal.firestoreId, signal.symbol)}
+                                                          className="flex items-center gap-1 bg-dark-800 hover:bg-dark-700 text-gray-400 hover:text-white px-2 py-1 rounded text-[10px] font-bold border border-white/10 transition-colors"
+                                                        >
+                                                            <SkipForward size={10}/> SKIP
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <span className={`font-bold ${
+                                                        signal.status === 'WON' ? 'text-brand-green' : 
+                                                        signal.status === 'LOST' ? 'text-brand-red' : 'text-gray-500'
+                                                    }`}>
+                                                        {signal.status}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
-                                        <span className="text-xs font-mono text-gray-300">${prices[pair] ? prices[pair].toLocaleString() : '...'}</span>
+                                        <div className="grid grid-cols-3 gap-2 mt-4 text-center">
+                                            <div className="bg-dark-800 p-2 rounded"><div className="text-[10px] text-gray-500">ENTRY</div><div className="text-white font-mono">{signal.entry}</div></div>
+                                            <div className="bg-dark-800 p-2 rounded"><div className="text-[10px] text-gray-500">SL</div><div className="text-brand-red font-mono">{signal.sl}</div></div>
+                                            <div className="bg-dark-800 p-2 rounded"><div className="text-[10px] text-gray-500">TP</div><div className="text-brand-green font-mono">{signal.tp}</div></div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="lg:col-span-1">
+                        <div className="glass-panel rounded-xl h-[400px] flex flex-col">
+                            <div className="p-3 border-b border-white/5 font-bold text-xs text-gray-400">LOGS</div>
+                            <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                                {logs.map((log, i) => (
+                                    <div key={i} className="text-[10px] font-mono border-l-2 border-white/10 pl-2">
+                                        <span className="text-gray-500">{log.time}</span> <span className={log.type === 'success' ? 'text-brand-green' : log.type === 'warning' ? 'text-brand-yellow' : 'text-gray-300'}>{log.msg}</span>
                                     </div>
                                 ))}
                             </div>
-                         </div>
-
-                         <div className="text-center">
-                            <p className="text-[10px] text-gray-600">Encrypted Connection • Secure Node</p>
-                         </div>
-                      </div>
-
-                  </div>
+                        </div>
+                    </div>
+                 </div>
               </main>
             </div>
           );
