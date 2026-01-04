@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI SMC Pro (Commercial Node)</title>
+    <title>AI Binance Market Scalper (SMC)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -76,11 +76,6 @@
         .animate-fade-in {
             animation: fadeIn 0.5s ease-out;
         }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
     </style>
 </head>
 <body>
@@ -120,7 +115,8 @@
         const db = getFirestore(app);
 
         // --- APP CONFIGURATION ---
-        const FUTURES_PAIRS = [
+        // LIST OF BINANCE PAIRS ONLY
+        const TRADING_PAIRS = [
           'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 
           'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'MATICUSDT',
           'DOTUSDT', 'TRXUSDT', 'LTCUSDT', 'SHIBUSDT', 'UNIUSDT',
@@ -131,8 +127,7 @@
           'ARBUSDT', 'APTUSDT', 'LDOUSDT', 'PEPEUSDT', 'SUIUSDT',
           'RNDRUSDT', 'INJUSDT', 'STXUSDT', 'CFXUSDT', 'AGIXUSDT',
           'WLDUSDT', 'TIAUSDT', 'SEIUSDT', 'ORDIUSDT', 'BONKUSDT',
-          'WIFUSDT', 'STRKUSDT', 'PYTHUSDT', 'JTOUSDT', 'MEMEUSDT',
-          'JUPUSDT', 'DYDXUSDT', 'IMXUSDT', 'SNXUSDT', 'CRVUSDT'
+          'WIFUSDT', 'STRKUSDT', 'PYTHUSDT', 'JTOUSDT', 'MEMEUSDT'
         ];
 
         const BINANCE_API = 'https://api.binance.com/api/v3';
@@ -167,7 +162,7 @@
               setUser(currentUser);
               setAuthLoading(false);
               if (currentUser) {
-                  addLog(`User Verified: ${currentUser.email}`, 'success');
+                  addLog(`Node Connected: ${currentUser.email}`, 'success');
               }
             });
             return () => unsubscribe();
@@ -214,9 +209,7 @@
             }, (error) => {
               console.error("Firestore Error:", error);
               if (error.code === 'permission-denied') {
-                  addLog("Database Permission Denied. Check Rules.", 'error');
-              } else {
-                  addLog("Sync Error. Retrying...", 'warning');
+                  addLog("Permission Denied. Check Rules.", 'error');
               }
             });
             return () => unsubscribe();
@@ -226,47 +219,38 @@
             e.preventDefault();
             setAuthError('');
             try {
-              // ONLY LOGIN - Removed Registration
               await signInWithEmailAndPassword(auth, email, password);
             } catch (err) { setAuthError(err.message.replace('Firebase: ', '')); }
           };
 
           const handleLogout = async () => { stopScanner(); await signOut(auth); };
 
-          // --- DATA MANAGEMENT ---
           const handleResetData = async () => {
-              if (!window.confirm("⚠️ WARNING: This will delete ALL trade history, win rates, and logs. This cannot be undone. Are you sure?")) {
+              if (!window.confirm("⚠️ WARNING: This will delete ALL trade data. Are you sure?")) {
                   return;
               }
-              
-              addLog("Resetting system data...", "warning");
-              
+              addLog("Clearing database...", "warning");
               try {
                   const deletePromises = signals.map(s => 
                       deleteDoc(doc(db, 'users', user.uid, 'signals', s.firestoreId))
                   );
-                  
                   await Promise.all(deletePromises);
-                  
                   setLogs([]);
-                  addLog("System reset complete. Data cleared.", "success");
-                  
+                  addLog("Data Reset Complete.", "success");
               } catch (err) {
-                  console.error("Error clearing data:", err);
-                  addLog("Error resetting data. Check Permissions.", "error");
+                  addLog("Reset Failed.", "error");
               }
           };
 
-          // --- SKIP FUNCTIONALITY ---
           const skipTrade = async (signalId, symbol) => {
               if (!user || !signalId) return;
               try {
                   const sigRef = doc(db, 'users', user.uid, 'signals', signalId);
                   await updateDoc(sigRef, { status: 'SKIPPED' });
-                  addLog(`Skipped: ${symbol}.`, 'warning');
+                  addLog(`Trade Skipped: ${symbol}`, 'warning');
                   processingTradeRef.current = false; 
               } catch (err) {
-                  console.error("Error skipping trade:", err);
+                  console.error("Skip error:", err);
               }
           };
 
@@ -280,7 +264,7 @@
               const response = await fetch(`${BINANCE_API}/ticker/price`);
               const data = await response.json();
               const priceMap = {};
-              data.forEach(d => { if (FUTURES_PAIRS.includes(d.symbol)) priceMap[d.symbol] = parseFloat(d.price); });
+              data.forEach(d => { if (TRADING_PAIRS.includes(d.symbol)) priceMap[d.symbol] = parseFloat(d.price); });
               setPrices(priceMap);
               updateSignalStatus(priceMap);
             } catch (err) { console.error("Price fetch error", err); }
@@ -301,15 +285,15 @@
               if (newStatus === 'ACTIVE') {
                 if (signal.type === 'LONG') {
                   if (currentPrice >= signal.tp) { 
-                      newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} TP HIT! SMC Win.`; logType = 'success'; 
+                      newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} TP HIT (Win)`; logType = 'success'; 
                   } else if (currentPrice <= signal.sl) { 
-                      newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL HIT.`; logType = 'error'; 
+                      newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL HIT (Loss)`; logType = 'error'; 
                   }
                 } else { 
                   if (currentPrice <= signal.tp) { 
-                      newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} TP HIT! SMC Win.`; logType = 'success'; 
+                      newStatus = 'WON'; closePrice = signal.tp; shouldUpdate = true; logMsg = `${signal.symbol} TP HIT (Win)`; logType = 'success'; 
                   } else if (currentPrice >= signal.sl) { 
-                      newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL HIT.`; logType = 'error'; 
+                      newStatus = 'LOST'; closePrice = signal.sl; shouldUpdate = true; logMsg = `${signal.symbol} SL HIT (Loss)`; logType = 'error'; 
                   }
                 }
               }
@@ -324,7 +308,7 @@
             });
           };
 
-          // --- SMC STRATEGY: LIQUIDITY SWEEPS (SFP) ---
+          // --- AI ENGINE: BINANCE MARKET ORDERS ---
           const analyzePair = async (symbol) => {
             if (!user) return;
             if (processingTradeRef.current) return;
@@ -336,7 +320,7 @@
             }
 
             try {
-              // 100 Candles to find structure
+              // Fetch Candles
               const res = await fetch(`${BINANCE_API}/klines?symbol=${symbol}&interval=${TIMEFRAME}&limit=100`);
               const rawData = await res.json();
               const candles = rawData.map(c => ({ 
@@ -349,14 +333,15 @@
               
               if (candles.length < 50) return;
 
-              const last = candles[candles.length - 1]; // Current Candle (Live)
-              const prev = candles[candles.length - 2]; // Completed Candle
+              const last = candles[candles.length - 1]; 
+              const prev = candles[candles.length - 2]; 
               
               const currentPrice = last.close;
               const atr = calculateATR(candles, 14);
 
               let signalData = null;
 
+              // SMC LOGIC: Liquidity Sweep
               const LOOKBACK = 15;
               let swingHigh = -Infinity;
               let swingLow = Infinity;
@@ -366,24 +351,21 @@
                   if (candles[i].low < swingLow) swingLow = candles[i].low;
               }
 
-              // LONG SETUP: MARKET ORDER
+              // MARKET BUY CONDITION
               if (prev.low < swingLow && prev.close > swingLow) {
                   if (last.close > prev.low) {
-                      const slDist = atr * 1.5;
                       const sl = prev.low - (atr * 0.2); 
                       const tp = currentPrice + (Math.abs(currentPrice - sl) * 1.5); 
-                      
-                      signalData = { type: 'LONG', entry: currentPrice, sl, tp, reason: "MARKET BUY: Liquidity Sweep" };
+                      signalData = { type: 'LONG', entry: currentPrice, sl, tp, reason: "MARKET BUY: SFP Sweep" };
                   }
               }
 
-              // SHORT SETUP: MARKET ORDER
+              // MARKET SELL CONDITION
               else if (prev.high > swingHigh && prev.close < swingHigh) {
                   if (last.close < prev.high) {
                       const sl = prev.high + (atr * 0.2); 
                       const tp = currentPrice - (Math.abs(sl - currentPrice) * 1.5); 
-                      
-                      signalData = { type: 'SHORT', entry: currentPrice, sl, tp, reason: "MARKET SELL: Liquidity Sweep" };
+                      signalData = { type: 'SHORT', entry: currentPrice, sl, tp, reason: "MARKET SELL: SFP Sweep" };
                   }
               }
 
@@ -399,19 +381,16 @@
                       entry: parseFloat(signalData.entry.toFixed(4)), 
                       sl: parseFloat(signalData.sl.toFixed(4)), 
                       tp: parseFloat(signalData.tp.toFixed(4)),
-                      status: 'ACTIVE', 
+                      status: 'ACTIVE', // MARKET ORDER: IMMEDIATELY ACTIVE
                       reason: signalData.reason, 
                       timestamp: Date.now(), 
-                      mode: 'MARKET_ORDER'
+                      mode: 'MARKET'
                   };
                   await addDoc(collection(db, 'users', user.uid, 'signals'), newSignal);
-                  addLog(`MARKET EXECUTION: ${symbol} (${signalData.type})`, 'success');
+                  addLog(`EXECUTED MARKET ORDER: ${symbol}`, 'success');
               }
             } catch (err) { 
                 console.error(`Analysis failed for ${symbol}`, err);
-                if (err.code === 'permission-denied') {
-                     addLog("Permission Denied: Check Firebase Rules", 'error');
-                }
             }
           };
 
@@ -428,15 +407,15 @@
           const startScanner = () => {
             if (scanning) return;
             setScanning(true); 
-            addLog(`SYSTEM STARTED: Binance Market Orders`, "success");
+            addLog(`SYSTEM STARTED: Scanning Binance Market`, "success");
             
-            FUTURES_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 500); });
+            TRADING_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 500); });
             
             scanIntervalRef.current = setInterval(() => { 
                 const hasActive = signalsRef.current.some(s => s.status === 'ACTIVE');
                 if (!hasActive && !processingTradeRef.current) {
-                    addLog(`Scanning Binance Futures (${FUTURES_PAIRS.length} pairs)...`, "info"); 
-                    FUTURES_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 800); }); 
+                    addLog(`Scanning ${TRADING_PAIRS.length} Binance Pairs...`, "info"); 
+                    TRADING_PAIRS.forEach((pair, index) => { setTimeout(() => analyzePair(pair), index * 800); }); 
                 }
             }, 15000); 
             
@@ -519,16 +498,15 @@
                         <h1 className="text-base font-bold text-white">AI SMC <span className="text-brand-green">PRO</span></h1>
                         <div className="flex items-center gap-2 text-[10px] text-gray-500">
                            <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse-fast"></span>
-                           {hasActiveTrade ? 'MANAGING SMC TRADE' : 'SCANNING LIQUIDITY'}
+                           {hasActiveTrade ? 'MANAGING ACTIVE TRADE' : 'SCANNING MARKET'}
                         </div>
                     </div>
                  </div>
                  <div className="flex items-center gap-3">
                     <div className="hidden md:flex items-center gap-2 bg-dark-800 border border-white/5 px-3 py-1.5 rounded text-[10px] font-bold text-brand-green">
                         <Globe size={12} className="animate-spin"/>
-                        MARKET ORDERS
+                        MARKET EXECUTION
                     </div>
-                    {/* RESET DATA BUTTON */}
                     <button onClick={handleResetData} title="Clear All History" className="p-2 text-brand-red hover:bg-brand-red/10 rounded transition-colors border border-brand-red/20">
                         <Trash2 size={16}/>
                     </button>
@@ -550,7 +528,7 @@
                             <h2 className={`text-xl font-mono font-bold mt-1 ${hasActiveTrade ? 'text-brand-blue' : 'text-brand-green'}`}>
                                 {hasActiveTrade ? 'ACTIVE' : 'SCANNING'}
                             </h2>
-                            <p className="text-[10px] text-gray-500">Binance Futures</p>
+                            <p className="text-[10px] text-gray-500">Binance Market</p>
                         </div>
                         {hasActiveTrade ? <Lock className="text-brand-blue" size={24}/> : <BarChart4 className="text-brand-green" size={24}/>}
                     </div>
@@ -577,7 +555,7 @@
                         {hasActiveTrade && tradeTab === 'RUNNING' && (
                              <div className="p-4 bg-brand-blue/10 border border-brand-blue/30 rounded-lg flex items-center gap-3 animate-pulse">
                                  <PauseCircle className="text-brand-blue" />
-                                 <span className="text-brand-blue text-xs font-bold">SCANNER PAUSED: Trade active.</span>
+                                 <span className="text-brand-blue text-xs font-bold">SCANNER PAUSED: Active Market Order Running.</span>
                              </div>
                         )}
 
@@ -593,7 +571,7 @@
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-xl font-bold text-white font-mono">{signal.symbol}</span>
                                                     <span className={`px-2 text-[10px] font-bold rounded ${signal.type === 'LONG' ? 'bg-brand-green/20 text-brand-green' : 'bg-brand-red/20 text-brand-red'}`}>{signal.type}</span>
-                                                    {signal.mode === 'MARKET_ORDER' && <span className="text-[8px] bg-brand-yellow/10 text-brand-yellow px-1 rounded border border-brand-yellow/20">MARKET</span>}
+                                                    {signal.mode === 'MARKET' && <span className="text-[8px] bg-brand-yellow/10 text-brand-yellow px-1 rounded border border-brand-yellow/20">MARKET</span>}
                                                 </div>
                                                 <div className="text-xs text-gray-500 mt-1">{new Date(signal.timestamp).toLocaleTimeString()} • {signal.reason}</div>
                                             </div>
